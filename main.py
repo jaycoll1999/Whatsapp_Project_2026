@@ -4,10 +4,21 @@ from sqlalchemy.orm import Session
 from db.database import engine, get_db
 from models.user import User
 from models.credit_distribution import CreditDistribution
+from models.message import Message
+from models.unofficial_device import UnofficialLinkedDevice
 from schemas.user import UserCreate, UserResponse, UserLogin, UserLoginResponse
 from schemas.credit_distribution import CreditDistributionCreate, CreditDistributionResponse, ResellerCreditStats, BusinessOwnerCreditStats
+from schemas.message import MessageCreate, MessageResponse, MessageSendRequest, BulkMessageRequest, MessageStats, WebhookPayload
+from schemas.unofficial_device import (
+    UnofficialDeviceCreate, UnofficialDeviceUpdate, UnofficialDeviceResponse,
+    QRCodeRequest, QRCodeResponse, DeviceConnectRequest, DeviceConnectResponse,
+    DeviceDisconnectRequest, DeviceDisconnectResponse, DeviceStatusUpdate,
+    DeviceStats, UserDeviceStats, BulkDeviceOperation, DeviceHealthCheck
+)
 from services.user_service import UserService
 from services.credit_distribution_service import CreditDistributionService
+from services.message_service import MessageService
+from services.unofficial_device_service import UnofficialDeviceService
 from typing import List
 import uvicorn
 
@@ -30,6 +41,14 @@ def get_user_service(db: Session = Depends(get_db)) -> UserService:
 # Dependency to get credit distribution service
 def get_credit_distribution_service(db: Session = Depends(get_db)) -> CreditDistributionService:
     return CreditDistributionService(db)
+
+# Dependency to get message service
+def get_message_service(db: Session = Depends(get_db)) -> MessageService:
+    return MessageService(db)
+
+# Dependency to get unofficial device service
+def get_unofficial_device_service(db: Session = Depends(get_db)) -> UnofficialDeviceService:
+    return UnofficialDeviceService(db)
 
 @app.get("/")
 def root():
@@ -468,6 +487,623 @@ def get_credit_distribution_summary(
     credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
 ):
     return credit_service.get_distribution_summary()
+
+# Message endpoints
+@app.post("/messages/", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+def create_message(
+    message: MessageCreate,
+    message_service: MessageService = Depends(get_message_service)
+):
+    try:
+        db_message = message_service.create_message(message)
+        return MessageResponse(
+            message_id=db_message.message_id,
+            user_id=db_message.user_id,
+            channel=db_message.channel,
+            mode=db_message.mode,
+            sender_number=db_message.sender_number,
+            receiver_number=db_message.receiver_number,
+            message_type=db_message.message_type,
+            template_name=db_message.template_name,
+            message_body=db_message.message_body,
+            status=db_message.status,
+            credits_used=db_message.credits_used,
+            sent_at=db_message.sent_at,
+            delivered_at=db_message.delivered_at,
+            read_at=db_message.read_at,
+            error_message=db_message.error_message,
+            external_message_id=db_message.external_message_id,
+            retry_count=db_message.retry_count,
+            max_retries=db_message.max_retries
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/users/{user_id}/send-message/", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+def send_message(
+    user_id: str,
+    message_request: MessageSendRequest,
+    message_service: MessageService = Depends(get_message_service)
+):
+    try:
+        db_message = message_service.send_message(user_id, message_request)
+        return MessageResponse(
+            message_id=db_message.message_id,
+            user_id=db_message.user_id,
+            channel=db_message.channel,
+            mode=db_message.mode,
+            sender_number=db_message.sender_number,
+            receiver_number=db_message.receiver_number,
+            message_type=db_message.message_type,
+            template_name=db_message.template_name,
+            message_body=db_message.message_body,
+            status=db_message.status,
+            credits_used=db_message.credits_used,
+            sent_at=db_message.sent_at,
+            delivered_at=db_message.delivered_at,
+            read_at=db_message.read_at,
+            error_message=db_message.error_message,
+            external_message_id=db_message.external_message_id,
+            retry_count=db_message.retry_count,
+            max_retries=db_message.max_retries
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/users/{user_id}/send-bulk-messages/", response_model=List[MessageResponse])
+def send_bulk_messages(
+    user_id: str,
+    bulk_request: BulkMessageRequest,
+    message_service: MessageService = Depends(get_message_service)
+):
+    try:
+        messages = message_service.send_bulk_messages(user_id, bulk_request)
+        return [
+            MessageResponse(
+                message_id=msg.message_id,
+                user_id=msg.user_id,
+                channel=msg.channel,
+                mode=msg.mode,
+                sender_number=msg.sender_number,
+                receiver_number=msg.receiver_number,
+                message_type=msg.message_type,
+                template_name=msg.template_name,
+                message_body=msg.message_body,
+                status=msg.status,
+                credits_used=msg.credits_used,
+                sent_at=msg.sent_at,
+                delivered_at=msg.delivered_at,
+                read_at=msg.read_at,
+                error_message=msg.error_message,
+                external_message_id=msg.external_message_id,
+                retry_count=msg.retry_count,
+                max_retries=msg.max_retries
+            ) for msg in messages
+        ]
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.get("/messages/", response_model=List[MessageResponse])
+def get_all_messages(
+    skip: int = 0,
+    limit: int = 100,
+    message_service: MessageService = Depends(get_message_service)
+):
+    messages = message_service.get_all_messages(skip, limit)
+    return [
+        MessageResponse(
+            message_id=msg.message_id,
+            user_id=msg.user_id,
+            channel=msg.channel,
+            mode=msg.mode,
+            sender_number=msg.sender_number,
+            receiver_number=msg.receiver_number,
+            message_type=msg.message_type,
+            template_name=msg.template_name,
+            message_body=msg.message_body,
+            status=msg.status,
+            credits_used=msg.credits_used,
+            sent_at=msg.sent_at,
+            delivered_at=msg.delivered_at,
+            read_at=msg.read_at,
+            error_message=msg.error_message,
+            external_message_id=msg.external_message_id,
+            retry_count=msg.retry_count,
+            max_retries=msg.max_retries
+        ) for msg in messages
+    ]
+
+@app.get("/messages/{message_id}", response_model=MessageResponse)
+def get_message(
+    message_id: str,
+    message_service: MessageService = Depends(get_message_service)
+):
+    message = message_service.get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found"
+        )
+    
+    return MessageResponse(
+        message_id=message.message_id,
+        user_id=message.user_id,
+        channel=message.channel,
+        mode=message.mode,
+        sender_number=message.sender_number,
+        receiver_number=message.receiver_number,
+        message_type=message.message_type,
+        template_name=message.template_name,
+        message_body=message.message_body,
+        status=message.status,
+        credits_used=message.credits_used,
+        sent_at=message.sent_at,
+        delivered_at=message.delivered_at,
+        read_at=message.read_at,
+        error_message=message.error_message,
+        external_message_id=message.external_message_id,
+        retry_count=message.retry_count,
+        max_retries=message.max_retries
+    )
+
+@app.get("/users/{user_id}/messages/", response_model=List[MessageResponse])
+def get_user_messages(
+    user_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    message_service: MessageService = Depends(get_message_service)
+):
+    messages = message_service.get_messages_by_user(user_id, skip, limit)
+    return [
+        MessageResponse(
+            message_id=msg.message_id,
+            user_id=msg.user_id,
+            channel=msg.channel,
+            mode=msg.mode,
+            sender_number=msg.sender_number,
+            receiver_number=msg.receiver_number,
+            message_type=msg.message_type,
+            template_name=msg.template_name,
+            message_body=msg.message_body,
+            status=msg.status,
+            credits_used=msg.credits_used,
+            sent_at=msg.sent_at,
+            delivered_at=msg.delivered_at,
+            read_at=msg.read_at,
+            error_message=msg.error_message,
+            external_message_id=msg.external_message_id,
+            retry_count=msg.retry_count,
+            max_retries=msg.max_retries
+        ) for msg in messages
+    ]
+
+@app.get("/messages/status/{status}", response_model=List[MessageResponse])
+def get_messages_by_status(
+    status: str,
+    skip: int = 0,
+    limit: int = 100,
+    message_service: MessageService = Depends(get_message_service)
+):
+    messages = message_service.get_messages_by_status(status, skip, limit)
+    return [
+        MessageResponse(
+            message_id=msg.message_id,
+            user_id=msg.user_id,
+            channel=msg.channel,
+            mode=msg.mode,
+            sender_number=msg.sender_number,
+            receiver_number=msg.receiver_number,
+            message_type=msg.message_type,
+            template_name=msg.template_name,
+            message_body=msg.message_body,
+            status=msg.status,
+            credits_used=msg.credits_used,
+            sent_at=msg.sent_at,
+            delivered_at=msg.delivered_at,
+            read_at=msg.read_at,
+            error_message=msg.error_message,
+            external_message_id=msg.external_message_id,
+            retry_count=msg.retry_count,
+            max_retries=msg.max_retries
+        ) for msg in messages
+    ]
+
+@app.post("/messages/retry-failed/")
+def retry_failed_messages(
+    max_retries: int = 3,
+    message_service: MessageService = Depends(get_message_service)
+):
+    retried_messages = message_service.retry_failed_messages(max_retries)
+    return {
+        "retried_count": len(retried_messages),
+        "message_ids": [msg.message_id for msg in retried_messages]
+    }
+
+@app.get("/users/{user_id}/message-stats/", response_model=MessageStats)
+def get_user_message_stats(
+    user_id: str,
+    message_service: MessageService = Depends(get_message_service)
+):
+    return message_service.get_message_stats(user_id)
+
+@app.get("/message-stats/", response_model=MessageStats)
+def get_global_message_stats(
+    message_service: MessageService = Depends(get_message_service)
+):
+    return message_service.get_message_stats()
+
+@app.post("/webhooks/whatsapp/{message_id}")
+def process_whatsapp_webhook(
+    message_id: str,
+    webhook_data: WebhookPayload,
+    message_service: MessageService = Depends(get_message_service)
+):
+    message = message_service.process_webhook(message_id, webhook_data.dict())
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found"
+        )
+    
+    return {"status": "success", "message": "Webhook processed successfully"}
+
+# Unofficial Linked Device endpoints
+@app.post("/unofficial-devices/", response_model=UnofficialDeviceResponse, status_code=status.HTTP_201_CREATED)
+def create_unofficial_device(
+    device: UnofficialDeviceCreate,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    try:
+        db_device = device_service.create_device(device)
+        return UnofficialDeviceResponse(
+            device_id=db_device.device_id,
+            user_id=db_device.user_id,
+            device_name=db_device.device_name,
+            device_type=db_device.device_type,
+            device_os=db_device.device_os,
+            browser_info=db_device.browser_info,
+            session_status=db_device.session_status,
+            qr_code_data=db_device.qr_code_data,
+            qr_last_generated=db_device.qr_last_generated,
+            qr_expires_at=db_device.qr_expires_at,
+            ip_address=db_device.ip_address,
+            user_agent=db_device.user_agent,
+            connection_string=db_device.connection_string,
+            last_active=db_device.last_active,
+            last_message_sent=db_device.last_message_sent,
+            last_message_received=db_device.last_message_received,
+            messages_sent=db_device.messages_sent,
+            messages_received=db_device.messages_received,
+            total_activity_time=db_device.total_activity_time,
+            is_active=db_device.is_active,
+            max_daily_messages=db_device.max_daily_messages,
+            daily_message_count=db_device.daily_message_count,
+            last_reset_date=db_device.last_reset_date,
+            last_error=db_device.last_error,
+            error_count=db_device.error_count,
+            reconnect_attempts=db_device.reconnect_attempts,
+            max_reconnect_attempts=db_device.max_reconnect_attempts,
+            created_at=db_device.created_at,
+            updated_at=db_device.updated_at,
+            last_connected_at=db_device.last_connected_at,
+            last_disconnected_at=db_device.last_disconnected_at
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.get("/unofficial-devices/", response_model=List[UnofficialDeviceResponse])
+def get_all_unofficial_devices(
+    skip: int = 0,
+    limit: int = 100,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    devices = device_service.get_all_devices(skip, limit)
+    return [
+        UnofficialDeviceResponse(
+            device_id=device.device_id,
+            user_id=device.user_id,
+            device_name=device.device_name,
+            device_type=device.device_type,
+            device_os=device.device_os,
+            browser_info=device.browser_info,
+            session_status=device.session_status,
+            qr_code_data=device.qr_code_data,
+            qr_last_generated=device.qr_last_generated,
+            qr_expires_at=device.qr_expires_at,
+            ip_address=device.ip_address,
+            user_agent=device.user_agent,
+            connection_string=device.connection_string,
+            last_active=device.last_active,
+            last_message_sent=device.last_message_sent,
+            last_message_received=device.last_message_received,
+            messages_sent=device.messages_sent,
+            messages_received=device.messages_received,
+            total_activity_time=device.total_activity_time,
+            is_active=device.is_active,
+            max_daily_messages=device.max_daily_messages,
+            daily_message_count=device.daily_message_count,
+            last_reset_date=device.last_reset_date,
+            last_error=device.last_error,
+            error_count=device.error_count,
+            reconnect_attempts=device.reconnect_attempts,
+            max_reconnect_attempts=device.max_reconnect_attempts,
+            created_at=device.created_at,
+            updated_at=device.updated_at,
+            last_connected_at=device.last_connected_at,
+            last_disconnected_at=device.last_disconnected_at
+        ) for device in devices
+    ]
+
+@app.get("/unofficial-devices/{device_id}", response_model=UnofficialDeviceResponse)
+def get_unofficial_device(
+    device_id: str,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    device = device_service.get_device_by_id(device_id)
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found"
+        )
+    
+    return UnofficialDeviceResponse(
+        device_id=device.device_id,
+        user_id=device.user_id,
+        device_name=device.device_name,
+        device_type=device.device_type,
+        device_os=device.device_os,
+        browser_info=device.browser_info,
+        session_status=device.session_status,
+        qr_code_data=device.qr_code_data,
+        qr_last_generated=device.qr_last_generated,
+        qr_expires_at=device.qr_expires_at,
+        ip_address=device.ip_address,
+        user_agent=device.user_agent,
+        connection_string=device.connection_string,
+        last_active=device.last_active,
+        last_message_sent=device.last_message_sent,
+        last_message_received=device.last_message_received,
+        messages_sent=device.messages_sent,
+        messages_received=device.messages_received,
+        total_activity_time=device.total_activity_time,
+        is_active=device.is_active,
+        max_daily_messages=device.max_daily_messages,
+        daily_message_count=device.daily_message_count,
+        last_reset_date=device.last_reset_date,
+        last_error=device.last_error,
+        error_count=device.error_count,
+        reconnect_attempts=device.reconnect_attempts,
+        max_reconnect_attempts=device.max_reconnect_attempts,
+        created_at=device.created_at,
+        updated_at=device.updated_at,
+        last_connected_at=device.last_connected_at,
+        last_disconnected_at=device.last_disconnected_at
+    )
+
+@app.get("/users/{user_id}/unofficial-devices/", response_model=List[UnofficialDeviceResponse])
+def get_user_unofficial_devices(
+    user_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    devices = device_service.get_devices_by_user(user_id, skip, limit)
+    return [
+        UnofficialDeviceResponse(
+            device_id=device.device_id,
+            user_id=device.user_id,
+            device_name=device.device_name,
+            device_type=device.device_type,
+            device_os=device.device_os,
+            browser_info=device.browser_info,
+            session_status=device.session_status,
+            qr_code_data=device.qr_code_data,
+            qr_last_generated=device.qr_last_generated,
+            qr_expires_at=device.qr_expires_at,
+            ip_address=device.ip_address,
+            user_agent=device.user_agent,
+            connection_string=device.connection_string,
+            last_active=device.last_active,
+            last_message_sent=device.last_message_sent,
+            last_message_received=device.last_message_received,
+            messages_sent=device.messages_sent,
+            messages_received=device.messages_received,
+            total_activity_time=device.total_activity_time,
+            is_active=device.is_active,
+            max_daily_messages=device.max_daily_messages,
+            daily_message_count=device.daily_message_count,
+            last_reset_date=device.last_reset_date,
+            last_error=device.last_error,
+            error_count=device.error_count,
+            reconnect_attempts=device.reconnect_attempts,
+            max_reconnect_attempts=device.max_reconnect_attempts,
+            created_at=device.created_at,
+            updated_at=device.updated_at,
+            last_connected_at=device.last_connected_at,
+            last_disconnected_at=device.last_disconnected_at
+        ) for device in devices
+    ]
+
+@app.put("/unofficial-devices/{device_id}", response_model=UnofficialDeviceResponse)
+def update_unofficial_device(
+    device_id: str,
+    update_data: UnofficialDeviceUpdate,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    device = device_service.update_device(device_id, update_data)
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found"
+        )
+    
+    return UnofficialDeviceResponse(
+        device_id=device.device_id,
+        user_id=device.user_id,
+        device_name=device.device_name,
+        device_type=device.device_type,
+        device_os=device.device_os,
+        browser_info=device.browser_info,
+        session_status=device.session_status,
+        qr_code_data=device.qr_code_data,
+        qr_last_generated=device.qr_last_generated,
+        qr_expires_at=device.qr_expires_at,
+        ip_address=device.ip_address,
+        user_agent=device.user_agent,
+        connection_string=device.connection_string,
+        last_active=device.last_active,
+        last_message_sent=device.last_message_sent,
+        last_message_received=device.last_message_received,
+        messages_sent=device.messages_sent,
+        messages_received=device.messages_received,
+        total_activity_time=device.total_activity_time,
+        is_active=device.is_active,
+        max_daily_messages=device.max_daily_messages,
+        daily_message_count=device.daily_message_count,
+        last_reset_date=device.last_reset_date,
+        last_error=device.last_error,
+        error_count=device.error_count,
+        reconnect_attempts=device.reconnect_attempts,
+        max_reconnect_attempts=device.max_reconnect_attempts,
+        created_at=device.created_at,
+        updated_at=device.updated_at,
+        last_connected_at=device.last_connected_at,
+        last_disconnected_at=device.last_disconnected_at
+    )
+
+@app.delete("/unofficial-devices/{device_id}")
+def delete_unofficial_device(
+    device_id: str,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    success = device_service.delete_device(device_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found"
+        )
+    
+    return {"message": "Device deleted successfully"}
+
+@app.post("/unofficial-devices/{device_id}/generate-qr/", response_model=QRCodeResponse)
+def generate_device_qr_code(
+    device_id: str,
+    regenerate: bool = False,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    try:
+        return device_service.generate_qr_code(device_id, regenerate)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/unofficial-devices/connect/", response_model=DeviceConnectResponse)
+def connect_unofficial_device(
+    connect_request: DeviceConnectRequest,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    try:
+        return device_service.connect_device(connect_request)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/unofficial-devices/disconnect/", response_model=DeviceDisconnectResponse)
+def disconnect_unofficial_device(
+    disconnect_request: DeviceDisconnectRequest,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    try:
+        return device_service.disconnect_device(disconnect_request)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/unofficial-devices/update-status/")
+def update_device_status(
+    status_update: DeviceStatusUpdate,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    try:
+        device_service.update_device_status(status_update)
+        return {"status": "success", "message": "Device status updated successfully"}
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.get("/unofficial-devices/{device_id}/stats/", response_model=DeviceStats)
+def get_device_stats(
+    device_id: str,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    try:
+        return device_service.get_device_stats(device_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+
+@app.get("/users/{user_id}/unofficial-devices/stats/", response_model=UserDeviceStats)
+def get_user_device_stats(
+    user_id: str,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    return device_service.get_user_device_stats(user_id)
+
+@app.post("/unofficial-devices/bulk-operation/")
+def bulk_device_operation(
+    operation: BulkDeviceOperation,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    return device_service.bulk_device_operation(operation)
+
+@app.get("/unofficial-devices/{device_id}/health-check/", response_model=DeviceHealthCheck)
+def device_health_check(
+    device_id: str,
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    try:
+        return device_service.health_check(device_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+
+@app.post("/unofficial-devices/cleanup-expired/")
+def cleanup_expired_devices(
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    count = device_service.cleanup_expired_devices()
+    return {"cleaned_count": count, "message": f"Cleaned up {count} expired devices"}
+
+@app.post("/unofficial-devices/reset-daily-counts/")
+def reset_daily_message_counts(
+    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+):
+    count = device_service.reset_daily_message_counts()
+    return {"reset_count": count, "message": f"Reset daily counts for {count} devices"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

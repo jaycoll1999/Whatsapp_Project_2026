@@ -51,3 +51,5 @@ class User(Base):
     # Relationships
     credit_distributions_sent = relationship("CreditDistribution", foreign_keys="CreditDistribution.from_reseller_id", back_populates="from_reseller")
     credit_distributions_received = relationship("CreditDistribution", foreign_keys="CreditDistribution.to_business_user_id", back_populates="to_business_user")
+    messages = relationship("Message", back_populates="user")
+    linked_devices = relationship("UnofficialLinkedDevice", back_populates="user")
