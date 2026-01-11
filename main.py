@@ -3,8 +3,11 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 from db.database import engine, get_db
 from models.user import User
+from models.credit_distribution import CreditDistribution
 from schemas.user import UserCreate, UserResponse, UserLogin, UserLoginResponse
+from schemas.credit_distribution import CreditDistributionCreate, CreditDistributionResponse, ResellerCreditStats, BusinessOwnerCreditStats
 from services.user_service import UserService
+from services.credit_distribution_service import CreditDistributionService
 from typing import List
 import uvicorn
 
@@ -23,6 +26,10 @@ security = HTTPBearer()
 # Dependency to get user service
 def get_user_service(db: Session = Depends(get_db)) -> UserService:
     return UserService(db)
+
+# Dependency to get credit distribution service
+def get_credit_distribution_service(db: Session = Depends(get_db)) -> CreditDistributionService:
+    return CreditDistributionService(db)
 
 @app.get("/")
 def root():
@@ -333,6 +340,134 @@ def get_business_owners_by_reseller(reseller_id: str, skip: int = 0, limit: int 
             updated_at=user.updated_at
         ) for user in business_owners
     ]
+
+# Credit Distribution endpoints
+@app.post("/credit-distributions/", response_model=CreditDistributionResponse, status_code=status.HTTP_201_CREATED)
+def create_credit_distribution(
+    distribution: CreditDistributionCreate,
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    try:
+        credit_distribution = credit_service.create_credit_distribution(distribution)
+        return CreditDistributionResponse(
+            distribution_id=credit_distribution.distribution_id,
+            from_reseller_id=credit_distribution.from_reseller_id,
+            to_business_user_id=credit_distribution.to_business_user_id,
+            credits_shared=credit_distribution.credits_shared,
+            shared_at=credit_distribution.shared_at
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.get("/credit-distributions/", response_model=List[CreditDistributionResponse])
+def get_all_credit_distributions(
+    skip: int = 0,
+    limit: int = 100,
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    distributions = credit_service.get_all_distributions(skip, limit)
+    return [
+        CreditDistributionResponse(
+            distribution_id=distribution.distribution_id,
+            from_reseller_id=distribution.from_reseller_id,
+            to_business_user_id=distribution.to_business_user_id,
+            credits_shared=distribution.credits_shared,
+            shared_at=distribution.shared_at
+        ) for distribution in distributions
+    ]
+
+@app.get("/credit-distributions/{distribution_id}", response_model=CreditDistributionResponse)
+def get_credit_distribution(
+    distribution_id: str,
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    distribution = credit_service.get_distribution_by_id(distribution_id)
+    if not distribution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Credit distribution not found"
+        )
+    
+    return CreditDistributionResponse(
+        distribution_id=distribution.distribution_id,
+        from_reseller_id=distribution.from_reseller_id,
+        to_business_user_id=distribution.to_business_user_id,
+        credits_shared=distribution.credits_shared,
+        shared_at=distribution.shared_at
+    )
+
+@app.get("/resellers/{reseller_id}/credit-distributions/", response_model=List[CreditDistributionResponse])
+def get_credit_distributions_by_reseller(
+    reseller_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    distributions = credit_service.get_distributions_by_reseller(reseller_id, skip, limit)
+    return [
+        CreditDistributionResponse(
+            distribution_id=distribution.distribution_id,
+            from_reseller_id=distribution.from_reseller_id,
+            to_business_user_id=distribution.to_business_user_id,
+            credits_shared=distribution.credits_shared,
+            shared_at=distribution.shared_at
+        ) for distribution in distributions
+    ]
+
+@app.get("/business-owners/{business_user_id}/credit-distributions/", response_model=List[CreditDistributionResponse])
+def get_credit_distributions_by_business_owner(
+    business_user_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    distributions = credit_service.get_distributions_by_business_owner(business_user_id, skip, limit)
+    return [
+        CreditDistributionResponse(
+            distribution_id=distribution.distribution_id,
+            from_reseller_id=distribution.from_reseller_id,
+            to_business_user_id=distribution.to_business_user_id,
+            credits_shared=distribution.credits_shared,
+            shared_at=distribution.shared_at
+        ) for distribution in distributions
+    ]
+
+@app.get("/resellers/{reseller_id}/credit-stats/", response_model=ResellerCreditStats)
+def get_reseller_credit_stats(
+    reseller_id: str,
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    stats = credit_service.get_reseller_credit_stats(reseller_id)
+    if not stats:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Reseller not found"
+        )
+    
+    return ResellerCreditStats(**stats)
+
+@app.get("/business-owners/{business_user_id}/credit-stats/", response_model=BusinessOwnerCreditStats)
+def get_business_owner_credit_stats(
+    business_user_id: str,
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    stats = credit_service.get_business_owner_credit_stats(business_user_id)
+    if not stats:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Business owner not found"
+        )
+    
+    return BusinessOwnerCreditStats(**stats)
+
+@app.get("/credit-distributions/summary/")
+def get_credit_distribution_summary(
+    credit_service: CreditDistributionService = Depends(get_credit_distribution_service)
+):
+    return credit_service.get_distribution_summary()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

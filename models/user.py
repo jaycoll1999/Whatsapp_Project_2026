@@ -1,5 +1,6 @@
 from sqlalchemy import Column, String, DateTime, Integer, Text, Boolean
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from db.database import Base
 import uuid
 from datetime import datetime
@@ -46,3 +47,7 @@ class User(Base):
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    credit_distributions_sent = relationship("CreditDistribution", foreign_keys="CreditDistribution.from_reseller_id", back_populates="from_reseller")
+    credit_distributions_received = relationship("CreditDistribution", foreign_keys="CreditDistribution.to_business_user_id", back_populates="to_business_user")
