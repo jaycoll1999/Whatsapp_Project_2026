@@ -44,6 +44,7 @@ class Message(Base):
     
     # Relationships
     user = relationship("User", back_populates="messages")
+    usage_logs = relationship("MessageUsageLog", back_populates="message")
     
     def __repr__(self):
         return f"<Message(id={self.message_id}, user_id={self.user_id}, status={self.status})>"

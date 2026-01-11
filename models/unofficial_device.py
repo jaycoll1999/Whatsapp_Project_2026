@@ -57,6 +57,8 @@ class UnofficialLinkedDevice(Base):
     
     # Relationships
     user = relationship("User", back_populates="linked_devices")
+    sessions = relationship("DeviceSession", back_populates="device")
+    usage_logs = relationship("MessageUsageLog", back_populates="device")
     
     def __repr__(self):
         return f"<UnofficialLinkedDevice(id={self.device_id}, user_id={self.user_id}, status={self.session_status})>"

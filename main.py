@@ -6,6 +6,9 @@ from models.user import User
 from models.credit_distribution import CreditDistribution
 from models.message import Message
 from models.unofficial_device import UnofficialLinkedDevice
+from models.device_session import DeviceSession
+from models.message_usage_log import MessageUsageLog
+from models.reseller_analytics import ResellerAnalytics
 from schemas.user import UserCreate, UserResponse, UserLogin, UserLoginResponse
 from schemas.credit_distribution import CreditDistributionCreate, CreditDistributionResponse, ResellerCreditStats, BusinessOwnerCreditStats
 from schemas.message import MessageCreate, MessageResponse, MessageSendRequest, BulkMessageRequest, MessageStats, WebhookPayload
@@ -15,11 +18,40 @@ from schemas.unofficial_device import (
     DeviceDisconnectRequest, DeviceDisconnectResponse, DeviceStatusUpdate,
     DeviceStats, UserDeviceStats, BulkDeviceOperation, DeviceHealthCheck
 )
+from schemas.device_session import (
+    DeviceSessionCreate, DeviceSessionUpdate, DeviceSessionResponse,
+    SessionCreateRequest, SessionCreateResponse, SessionValidateRequest, SessionValidateResponse,
+    SessionExtendRequest, SessionExtendResponse, SessionRevokeRequest, SessionRevokeResponse,
+    SessionLoginRequest, SessionLoginResponse, SessionActivityUpdate,
+    SessionStats, DeviceSessionStats, UserSessionStats, SessionSecurityCheck,
+    BulkSessionOperation, SessionCleanupRequest, SessionCleanupResponse,
+    SessionHealthCheck
+)
+from schemas.message_usage_log import (
+    MessageUsageLogCreate, MessageUsageLogUpdate, MessageUsageLogResponse,
+    UsageLogCreateRequest, UsageLogCreateResponse, UsageLogRefundRequest, UsageLogRefundResponse,
+    UsageLogUpdateRequest, UsageLogUpdateResponse, UsageStats, UserUsageStats,
+    DeviceUsageStats, SessionUsageStats, UsageAnalytics, UsageFilter,
+    BulkUsageOperation, BulkUsageResponse, UsageCleanupRequest, UsageCleanupResponse
+)
+from schemas.reseller_analytics import (
+    ResellerAnalyticsResponse, AnalyticsData, BusinessUserStats,
+    CreateAnalyticsRequest, UpdateAnalyticsRequest,
+    CreateBusinessUserStatsRequest, UpdateBusinessUserStatsRequest,
+    AnalyticsFilter, AnalyticsSummary, ResellerPerformanceMetrics,
+    TopPerformersResponse, AnalyticsTrends, AnalyticsComparison,
+    AnalyticsExportRequest, AnalyticsExportResponse,
+    AnalyticsHealthCheck, AnalyticsCleanupRequest, AnalyticsCleanupResponse
+)
 from services.user_service import UserService
 from services.credit_distribution_service import CreditDistributionService
 from services.message_service import MessageService
 from services.unofficial_device_service import UnofficialDeviceService
-from typing import List
+from services.device_session_service import DeviceSessionService
+from services.message_usage_log_service import MessageUsageLogService
+from services.reseller_analytics_service import ResellerAnalyticsService
+from typing import List, Optional
+from datetime import datetime
 import uvicorn
 
 # Create database tables
@@ -49,6 +81,18 @@ def get_message_service(db: Session = Depends(get_db)) -> MessageService:
 # Dependency to get unofficial device service
 def get_unofficial_device_service(db: Session = Depends(get_db)) -> UnofficialDeviceService:
     return UnofficialDeviceService(db)
+
+# Dependency to get device session service
+def get_device_session_service(db: Session = Depends(get_db)) -> DeviceSessionService:
+    return DeviceSessionService(db)
+
+# Dependency to get message usage log service
+def get_message_usage_log_service(db: Session = Depends(get_db)) -> MessageUsageLogService:
+    return MessageUsageLogService(db)
+
+# Dependency to get reseller analytics service
+def get_reseller_analytics_service(db: Session = Depends(get_db)) -> ResellerAnalyticsService:
+    return ResellerAnalyticsService(db)
 
 @app.get("/")
 def root():
@@ -1098,12 +1142,380 @@ def cleanup_expired_devices(
     count = device_service.cleanup_expired_devices()
     return {"cleaned_count": count, "message": f"Cleaned up {count} expired devices"}
 
-@app.post("/unofficial-devices/reset-daily-counts/")
-def reset_daily_message_counts(
-    device_service: UnofficialDeviceService = Depends(get_unofficial_device_service)
+# Message Usage & Credit Log endpoints
+@app.post("/usage-logs/", response_model=UsageLogCreateResponse, status_code=status.HTTP_201_CREATED)
+def create_usage_log(
+    usage_request: UsageLogCreateRequest,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
 ):
-    count = device_service.reset_daily_message_counts()
-    return {"reset_count": count, "message": f"Reset daily counts for {count} devices"}
+    try:
+        return usage_service.create_usage_log(usage_request)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.get("/usage-logs/", response_model=List[MessageUsageLogResponse])
+def get_usage_logs(
+    skip: int = 0,
+    limit: int = 100,
+    user_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    usage_type: Optional[str] = None,
+    status: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    # Build filter
+    filters = UsageFilter(
+        user_id=user_id,
+        device_id=device_id,
+        session_id=session_id,
+        message_id=message_id,
+        usage_type=UsageType(usage_type) if usage_type else None,
+        status=UsageStatus(status) if status else None,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    usage_logs = usage_service.get_usage_logs(skip, limit, filters)
+    return [
+        MessageUsageLogResponse(
+            usage_id=log.usage_id,
+            user_id=log.user_id,
+            message_id=log.message_id,
+            device_id=log.device_id,
+            session_id=log.session_id,
+            usage_type=log.usage_type,
+            credits_deducted=log.credits_deducted,
+            credits_refunded=log.credits_refunded,
+            net_credits=log.net_credits,
+            balance_before=log.balance_before,
+            balance_after=log.balance_after,
+            cost_per_credit=float(log.cost_per_credit),
+            total_cost=float(log.total_cost),
+            currency=log.currency,
+            message_type=log.message_type,
+            message_size=log.message_size,
+            recipient_count=log.recipient_count,
+            delivery_status=log.delivery_status,
+            status=log.status,
+            error_code=log.error_code,
+            error_message=log.error_message,
+            ip_address=log.ip_address,
+            user_agent=log.user_agent,
+            api_endpoint=log.api_endpoint,
+            request_id=log.request_id,
+            refund_reason=log.refund_reason,
+            refund_timestamp=log.refund_timestamp,
+            refund_processed_by=log.refund_processed_by,
+            created_at=log.created_at,
+            updated_at=log.updated_at,
+            processed_at=log.processed_at
+        ) for log in usage_logs
+    ]
+
+@app.get("/usage-logs/{usage_id}", response_model=MessageUsageLogResponse)
+def get_usage_log(
+    usage_id: str,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    usage_log = usage_service.get_usage_log_by_id(usage_id)
+    if not usage_log:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usage log not found"
+        )
+    
+    return MessageUsageLogResponse(
+        usage_id=usage_log.usage_id,
+        user_id=usage_log.user_id,
+        message_id=usage_log.message_id,
+        device_id=usage_log.device_id,
+        session_id=usage_log.session_id,
+        usage_type=usage_log.usage_type,
+        credits_deducted=usage_log.credits_deducted,
+        credits_refunded=usage_log.credits_refunded,
+        net_credits=usage_log.net_credits,
+        balance_before=usage_log.balance_before,
+        balance_after=usage_log.balance_after,
+        cost_per_credit=float(usage_log.cost_per_credit),
+        total_cost=float(usage_log.total_cost),
+        currency=usage_log.currency,
+        message_type=usage_log.message_type,
+        message_size=usage_log.message_size,
+        recipient_count=usage_log.recipient_count,
+        delivery_status=usage_log.delivery_status,
+        status=usage_log.status,
+        error_code=usage_log.error_code,
+        error_message=usage_log.error_message,
+        ip_address=usage_log.ip_address,
+        user_agent=usage_log.user_agent,
+        api_endpoint=usage_log.api_endpoint,
+        request_id=usage_log.request_id,
+        refund_reason=usage_log.refund_reason,
+        refund_timestamp=usage_log.refund_timestamp,
+        refund_processed_by=usage_log.refund_processed_by,
+        created_at=usage_log.created_at,
+        updated_at=usage_log.updated_at,
+        processed_at=usage_log.processed_at
+    )
+
+@app.get("/users/{user_id}/usage-logs/", response_model=List[MessageUsageLogResponse])
+def get_user_usage_logs(
+    user_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    usage_logs = usage_service.get_user_usage_logs(user_id, skip, limit)
+    return [
+        MessageUsageLogResponse(
+            usage_id=log.usage_id,
+            user_id=log.user_id,
+            message_id=log.message_id,
+            device_id=log.device_id,
+            session_id=log.session_id,
+            usage_type=log.usage_type,
+            credits_deducted=log.credits_deducted,
+            credits_refunded=log.credits_refunded,
+            net_credits=log.net_credits,
+            balance_before=log.balance_before,
+            balance_after=log.balance_after,
+            cost_per_credit=float(log.cost_per_credit),
+            total_cost=float(log.total_cost),
+            currency=log.currency,
+            message_type=log.message_type,
+            message_size=log.message_size,
+            recipient_count=log.recipient_count,
+            delivery_status=log.delivery_status,
+            status=log.status,
+            error_code=log.error_code,
+            error_message=log.error_message,
+            ip_address=log.ip_address,
+            user_agent=log.user_agent,
+            api_endpoint=log.api_endpoint,
+            request_id=log.request_id,
+            refund_reason=log.refund_reason,
+            refund_timestamp=log.refund_timestamp,
+            refund_processed_by=log.refund_processed_by,
+            created_at=log.created_at,
+            updated_at=log.updated_at,
+            processed_at=log.processed_at
+        ) for log in usage_logs
+    ]
+
+@app.get("/devices/{device_id}/usage-logs/", response_model=List[MessageUsageLogResponse])
+def get_device_usage_logs(
+    device_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    usage_logs = usage_service.get_device_usage_logs(device_id, skip, limit)
+    return [
+        MessageUsageLogResponse(
+            usage_id=log.usage_id,
+            user_id=log.user_id,
+            message_id=log.message_id,
+            device_id=log.device_id,
+            session_id=log.session_id,
+            usage_type=log.usage_type,
+            credits_deducted=log.credits_deducted,
+            credits_refunded=log.credits_refunded,
+            net_credits=log.net_credits,
+            balance_before=log.balance_before,
+            balance_after=log.balance_after,
+            cost_per_credit=float(log.cost_per_credit),
+            total_cost=float(log.total_cost),
+            currency=log.currency,
+            message_type=log.message_type,
+            message_size=log.message_size,
+            recipient_count=log.recipient_count,
+            delivery_status=log.delivery_status,
+            status=log.status,
+            error_code=log.error_code,
+            error_message=log.error_message,
+            ip_address=log.ip_address,
+            user_agent=log.user_agent,
+            api_endpoint=log.api_endpoint,
+            request_id=log.request_id,
+            refund_reason=log.refund_reason,
+            refund_timestamp=log.refund_timestamp,
+            refund_processed_by=log.refund_processed_by,
+            created_at=log.created_at,
+            updated_at=log.updated_at,
+            processed_at=log.processed_at
+        ) for log in usage_logs
+    ]
+
+@app.get("/sessions/{session_id}/usage-logs/", response_model=List[MessageUsageLogResponse])
+def get_session_usage_logs(
+    session_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    usage_logs = usage_service.get_session_usage_logs(session_id, skip, limit)
+    return [
+        MessageUsageLogResponse(
+            usage_id=log.usage_id,
+            user_id=log.user_id,
+            message_id=log.message_id,
+            device_id=log.device_id,
+            session_id=log.session_id,
+            usage_type=log.usage_type,
+            credits_deducted=log.credits_deducted,
+            credits_refunded=log.credits_refunded,
+            net_credits=log.net_credits,
+            balance_before=log.balance_before,
+            balance_after=log.balance_after,
+            cost_per_credit=float(log.cost_per_credit),
+            total_cost=float(log.total_cost),
+            currency=log.currency,
+            message_type=log.message_type,
+            message_size=log.message_size,
+            recipient_count=log.recipient_count,
+            delivery_status=log.delivery_status,
+            status=log.status,
+            error_code=log.error_code,
+            error_message=log.error_message,
+            ip_address=log.ip_address,
+            user_agent=log.user_agent,
+            api_endpoint=log.api_endpoint,
+            request_id=log.request_id,
+            refund_reason=log.refund_reason,
+            refund_timestamp=log.refund_timestamp,
+            refund_processed_by=log.refund_processed_by,
+            created_at=log.created_at,
+            updated_at=log.updated_at,
+            processed_at=log.processed_at
+        ) for log in usage_logs
+    ]
+
+@app.put("/usage-logs/{usage_id}", response_model=MessageUsageLogResponse)
+def update_usage_log(
+    usage_id: str,
+    update_data: MessageUsageLogUpdate,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    usage_log = usage_service.update_usage_log(usage_id, update_data)
+    if not usage_log:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usage log not found"
+        )
+    
+    return MessageUsageLogResponse(
+        usage_id=usage_log.usage_id,
+        user_id=usage_log.user_id,
+        message_id=usage_log.message_id,
+        device_id=usage_log.device_id,
+        session_id=usage_log.session_id,
+        usage_type=usage_log.usage_type,
+        credits_deducted=usage_log.credits_deducted,
+        credits_refunded=usage_log.credits_refunded,
+        net_credits=usage_log.net_credits,
+        balance_before=usage_log.balance_before,
+        balance_after=usage_log.balance_after,
+        cost_per_credit=float(usage_log.cost_per_credit),
+        total_cost=float(usage_log.total_cost),
+        currency=usage_log.currency,
+        message_type=usage_log.message_type,
+        message_size=usage_log.message_size,
+        recipient_count=usage_log.recipient_count,
+        delivery_status=usage_log.delivery_status,
+        status=usage_log.status,
+        error_code=usage_log.error_code,
+        error_message=usage_log.error_message,
+        ip_address=usage_log.ip_address,
+        user_agent=usage_log.user_agent,
+        api_endpoint=usage_log.api_endpoint,
+        request_id=usage_log.request_id,
+        refund_reason=usage_log.refund_reason,
+        refund_timestamp=usage_log.refund_timestamp,
+        refund_processed_by=usage_log.refund_processed_by,
+        created_at=usage_log.created_at,
+        updated_at=usage_log.updated_at,
+        processed_at=usage_log.processed_at
+    )
+
+@app.post("/usage-logs/refund/", response_model=UsageLogRefundResponse)
+def refund_usage_log(
+    refund_request: UsageLogRefundRequest,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    try:
+        return usage_service.refund_usage_log(refund_request)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/usage-logs/mark-failed/", response_model=UsageLogUpdateResponse)
+def mark_usage_failed(
+    update_request: UsageLogUpdateRequest,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    try:
+        return usage_service.mark_usage_failed(update_request)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.get("/usage-logs/stats/", response_model=UsageStats)
+def get_usage_stats(
+    user_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    usage_type: Optional[str] = None,
+    status: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    # Build filter
+    filters = UsageFilter(
+        user_id=user_id,
+        device_id=device_id,
+        session_id=session_id,
+        usage_type=UsageType(usage_type) if usage_type else None,
+        status=UsageStatus(status) if status else None,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    return usage_service.get_usage_stats(filters)
+
+@app.get("/users/{user_id}/usage-stats/", response_model=UserUsageStats)
+def get_user_usage_stats(
+    user_id: str,
+    days: int = 30,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    return usage_service.get_user_usage_stats(user_id, days)
+
+@app.get("/devices/{device_id}/usage-stats/", response_model=DeviceUsageStats)
+def get_device_usage_stats(
+    device_id: str,
+    days: int = 30,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    return usage_service.get_device_usage_stats(device_id, days)
+
+@app.get("/sessions/{session_id}/usage-stats/", response_model=SessionUsageStats)
+def get_session_usage_stats(
+    session_id: str,
+    usage_service: MessageUsageLogService = Depends(get_message_usage_log_service)
+):
+    return usage_service.get_session_usage_stats(session_id)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
